@@ -1,0 +1,11 @@
+# Ignore everything by default in this directory...
+*
+
+# ...except this gitignore file and the code we want to track.
+!.gitignore
+!cbo_flow/
+!cbo_flow/**
+
+# Re-ignore generated files inside cbo_flow/
+**/__pycache__/
+*.pyc
