@@ -743,9 +743,10 @@ def run_plot(
     wc: bool,
     wc_max: float | None,
     save_name: str,
+    eps: float,
 ) -> Path:
     repo_root = Path(__file__).resolve().parents[1]
-    plot_script = repo_root / "cbo_flow" / "plot_series.py"
+    plot_script = repo_root / "cbo_flow" / "make_plots.py"
     if not plot_script.exists():
         raise FileNotFoundError(f"Missing plot script: {plot_script}")
 
@@ -756,12 +757,14 @@ def run_plot(
         str(plot_script),
         "--output-dir",
         str(out_dir),
-        "--source",
+        "--field-source",
         source,
         "--x",
         x,
-        "--save",
+        "--field-save",
         str(save_path),
+        "--eps",
+        str(eps),
     ]
     if qliq:
         cmd.append("--qliq")
@@ -1038,6 +1041,7 @@ def main() -> None:
             wc=wc,
             wc_max=wc_max,
             save_name=save_name,
+            eps=eps,
         )
         print(f"PLOT = '{save_path}';")
 
@@ -1053,7 +1057,7 @@ def main() -> None:
         wc_lines = ",".join(str(float(v)) for v in (wc_lines_raw or []))
 
         repo_root = Path(__file__).resolve().parents[1]
-        script = repo_root / "cbo_flow" / "plot_well_wc.py"
+        script = repo_root / "cbo_flow" / "make_plots.py"
         if not script.exists():
             raise FileNotFoundError(f"Missing plot script: {script}")
 
@@ -1063,15 +1067,18 @@ def main() -> None:
             str(script),
             "--output-dir",
             str(out_dir),
+            "--field-source",
+            "none",
+            "--per-well-wc",
             "--wells",
             ",".join(["PROD1", "PROD2", "PROD3", "PROD4"]),
             "--x",
             x,
-            "--save-dir",
+            "--per-well-save-dir",
             str(save_dir),
             "--eps",
             str(eps),
-            "--prefix",
+            "--per-well-prefix",
             prefix,
         ]
         if wc_lines:
