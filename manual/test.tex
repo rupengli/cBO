@@ -1,0 +1,275 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\title{Constrained Bayesian Optimization Testbed: Egg Model (OPM Flow)}
+\date{}
+\begin{document}
+\maketitle
+
+\section{Overview}
+We build a constrained Bayesian optimization (CBO) test environment using the \emph{Egg} waterflood benchmark and the \emph{OPM Flow} black-oil reservoir simulator. Each function evaluation runs the simulator once and returns:
+\begin{itemize}
+  \item a scalar objective (NPV computed from cumulative totals), and
+  \item several black-box constraints computed from simulator outputs (facility/capacity constraints).
+\end{itemize}
+
+\section{Installing OPM Flow}
+For up-to-date installation instructions, use the official OPM page:
+\begin{center}
+\url{https://opm-project.org/?page_id=36}
+\end{center}
+In short, OPM recommends using binary packages when available (e.g., Ubuntu via PPA and RHEL via an online repository), and building from source otherwise. The same page links to:
+\begin{itemize}
+  \item \textbf{Binary Packages}: detailed steps for supported Linux distributions.
+  \item \textbf{Compiling from source}: generic Linux/macOS build instructions.
+  \item \textbf{Windows}: guidance for running Flow under WSL2 or via a virtual machine.
+\end{itemize}
+
+\section{Downloading the Egg model data files}
+The Egg benchmark deck and supporting include files are available from:
+\begin{center}
+\url{https://data.4tu.nl/articles/dataset/The_Egg_Model_-_data_files/12707642}
+\end{center}
+After downloading, unzip the dataset and ensure the folder layout matches what the code expects. By default, the config uses:
+\[
+\texttt{paths.dataset\_root: Egg\_Model\_Data\_Files\_v2}
+\]
+and the evaluator expects (at minimum) paths such as:
+\begin{itemize}
+  \item \texttt{Egg\_Model\_Data\_Files\_v2/Eclipse/Egg\_Model\_ECL.DATA}
+  \item \texttt{Egg\_Model\_Data\_Files\_v2/Eclipse/SCHEDULE\_NEW.INC}
+  \item \texttt{Egg\_Model\_Data\_Files\_v2/Permeability\_Realizations/PERM1\_ECL.INC} (and other realizations)
+\end{itemize}
+If you unzip into a different folder name or location, update \texttt{paths.dataset\_root} in the YAML/JSON config accordingly.
+
+\section{Quick start (run one evaluation)}
+With OPM Flow installed and the data files in place, a typical run is:
+\begin{verbatim}
+python3 cbo_flow/egg_main.py --config cbo_flow/egg_config.yaml
+\end{verbatim}
+This will:
+\begin{itemize}
+  \item create a fresh run directory (\texttt{paths.work\_dir}),
+  \item run \texttt{flow} on the patched deck, and
+  \item print MATLAB-style outputs (objective + constraints) and write plots if enabled.
+\end{itemize}
+
+\section{Decision Variables (8$\times$stages, piecewise-constant controls)}
+The Egg setting uses 12 wells: 8 injectors and 4 producers. The decision variables control only the \textbf{injector rates}. Producer BHP is fixed at a constant value (395 bar in the current config). Controls are \emph{piecewise-constant} over $n_{\mathrm{stages}}$ stages on the full horizon $[0,T]$. The number of stages is a user input in the config file.
+
+\subsection*{Control policy}
+\begin{itemize}
+  \item \textbf{Injectors (8 wells):} control water injection \textbf{rates} in each stage.
+  \item \textbf{Producers (4 wells):} producer \textbf{BHP} is fixed (not optimized).
+\end{itemize}
+
+Let injectors be $I_1,\dots,I_8$ and producers be $P_1,\dots,P_4$. The decision vector
+\[
+x \in \mathbb{R}^{8n_{\mathrm{stages}}}
+\]
+is defined as a flat concatenation, \emph{stage by stage}:
+\[
+x^{(s)} =
+\big(
+q_{I_1}^{(s)},\dots,q_{I_8}^{(s)}
+\big),
+\qquad
+x = \big(x^{(1)},\dots,x^{(n_{\mathrm{stages}})}\big),
+\]
+where $q_{I_j}^{(s)}$ is the injection rate for injector $I_j$ in stage $s$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llll}
+\toprule
+Variable block & Wells & Control type & Count \\
+\midrule
+$\{q_{I_j}^{(s)}\}_{j=1}^8$ & Injectors $I_1\ldots I_8$ & Rate (per stage) & $8$ \\
+\midrule
+Total & 12 wells & $n_{\mathrm{stages}}$ stages & $8n_{\mathrm{stages}}$ \\
+\bottomrule
+\end{tabular}
+\caption{Decision variables for the Egg CBO testbed.}
+\end{table}
+
+\section{Objective (Black-box NPV from cumulative totals)}
+We use a simple, constant-economics NPV with \emph{no discounting}, computed from end-of-horizon cumulative totals returned by the simulator:
+\begin{equation}
+\label{eq:npv}
+\mathrm{NPV}(x)
+=
+p_o \cdot \mathrm{CumOil}(T)
+-
+c_w \cdot \mathrm{CumWaterProd}(T)
+-
+c_{inj} \cdot \mathrm{CumWaterInj}(T),
+\end{equation}
+where:
+\begin{itemize}
+  \item $\mathrm{CumOil}(T)$: field cumulative oil produced,
+  \item $\mathrm{CumWaterProd}(T)$: field cumulative water produced,
+  \item $\mathrm{CumWaterInj}(T)$: field cumulative water injected,
+  \item $p_o>0$: oil price (constant),
+  \item $c_w>0$: produced-water handling cost (constant),
+  \item $c_{inj}>0$: injected-water cost (constant).
+\end{itemize}
+If the optimizer is in minimization form, we use:
+\[
+f(x) = -\mathrm{NPV}(x).
+\]
+The mapping $x \mapsto \mathrm{NPV}(x)$ is black-box since it requires a full simulator run.
+
+\section{Constraints (Black-box, output-based)}
+We enforce facility/capacity constraints computed from simulator output time series.
+All constraints are of the form $g_i(x)\le 0$.
+
+\subsection{C1: Peak field water injection rate (capacity)}
+Let $q_{inj}^{field}(t)$ be the field total water injection rate. Define:
+\begin{equation}
+g_{\mathrm{winj}}(x)
+=
+\max_{t\in[0,T]}
+q_{inj}^{field}(t)
+-
+Q_{\mathrm{winj}}^{\max}
+\le 0.
+\end{equation}
+\paragraph{Parameter guidance.}
+$Q_{\mathrm{winj}}^{\max}$ is a surface facility/injection capacity. In many engineering scenarios it is set high enough that this constraint is rarely violated (often effectively ``loose''). If you want C1 to be active in optimization, choose $Q_{\mathrm{winj}}^{\max}$ closer to typical peak injection (e.g., calibrate from a baseline run) rather than an extremely large value.
+
+\subsection{C2: Peak field water production rate (treatment/disposal)}
+\begin{equation}
+g_{\mathrm{wprod}}(x)
+=
+\max_{t\in[0,T]}
+q_w^{field}(t)
+-
+Q_{\mathrm{wprod}}^{\max}
+\le 0.
+\end{equation}
+\paragraph{Parameter guidance.}
+$Q_{\mathrm{wprod}}^{\max}$ represents produced-water treatment/disposal capacity. It is often set conservatively high and therefore rarely violated. To make C2 meaningful, set it closer to expected peak produced-water rates; otherwise most solutions will satisfy it (``weak'' constraint).
+
+\subsection{C3: Peak field liquid production rate (platform liquid handling)}
+Let $q_o^{field}(t)$ and $q_w^{field}(t)$ be the field oil and water production rates. Define:
+\begin{equation}
+g_{\mathrm{liq}}(x)
+=
+\max_{t\in[0,T]}
+\big(q_o^{field}(t)+q_w^{field}(t)\big)
+-
+Q_{\mathrm{liq}}^{\max}
+\le 0.
+\end{equation}
+\paragraph{Parameter guidance.}
+$Q_{\mathrm{liq}}^{\max}$ is the platform liquid-handling capacity. Like C1--C2, it can be very loose if set far above the expected peak liquid rate. If you want this constraint to filter a non-trivial fraction of candidate controls, set it near the baseline peak liquid rate (or only slightly above it).
+
+\subsection{C4: Peak field water-cut (guardrail)}
+Define field water cut:
+\[
+\mathrm{WC}(t) = \frac{q_w^{field}(t)}{q_o^{field}(t)+q_w^{field}(t)+\epsilon},
+\]
+with a small $\epsilon>0$ to avoid division by zero. The constraint is:
+\begin{equation}
+g_{\mathrm{wc}}(x)
+=
+\max_{t\in[0,T]}
+\mathrm{WC}(t)
+-
+\mathrm{WC}^{\max}
+\le 0.
+\end{equation}
+\paragraph{Parameter guidance.}
+$\mathrm{WC}^{\max}$ is typically the most ``active'' operational guardrail: the \emph{lower} $\mathrm{WC}^{\max}$ is, the \emph{more restrictive} the constraint.
+For practical engineering scenarios, $\mathrm{WC}^{\max}\approx 0.8$ is a reasonable lower bound and can remove a substantial portion of solutions; values around $0.6$ are very restrictive; values below $0.6$ are unusual. Values higher than about $0.95$ are also uncommon and usually make C4 almost irrelevant.
+
+\subsection{C5: Early breakthrough (field-level water cut up to $T_{\mathrm{early}}$ years)}
+Define the same field water cut $\mathrm{WC}(t)$ as above. For a user-chosen early window $T_{\mathrm{early}}$ (years) and a small threshold $\mathrm{WC}_\epsilon$, the constraint is:
+\begin{equation}
+g_{\mathrm{wc,early}}(x)
+=
+\max_{t \le T_{\mathrm{early}}}\mathrm{WC}(t) - \mathrm{WC}_\epsilon \le 0.
+\end{equation}
+\paragraph{Parameter guidance.}
+C5 enforces ``oil-only'' production early in life: it requires field water cut to remain below $\mathrm{WC}_\epsilon$ up to $T_{\mathrm{early}}$.
+Typical settings for $T_{\mathrm{early}}$ are 1--3 years; values above about 4 years are very restrictive. Smaller $\mathrm{WC}_\epsilon$ (e.g., 0.01) further tightens the constraint.
+
+\subsection{C6: Breakthrough-time spread across producers (well-level)}
+Define per-producer water cut:
+\[
+\mathrm{WC}_j(t) = \frac{q_{w,j}(t)}{q_{o,j}(t)+q_{w,j}(t)+\epsilon},
+\]
+using producer oil/water rates. Define breakthrough time for producer $j$:
+\[
+t_{bt,j}=\min\{t:\mathrm{WC}_j(t)\ge \mathrm{WC}_\epsilon\},
+\]
+and set $t_{bt,j}=+\infty$ if it never crosses within the horizon. The constraint is:
+\begin{equation}
+g_{\mathrm{bt,spread}}(x)
+=
+\big(\max_j t_{bt,j}-\min_j t_{bt,j}\big) - \Delta t_{\max} \le 0.
+\end{equation}
+\paragraph{Parameter guidance.}
+$\Delta t_{\max}$ controls how synchronized producer breakthrough must be.
+Large values (e.g., 6 years) are loose and most solutions will satisfy them; values around 1--2 years are very restrictive. This constraint is useful for avoiding strategies where one producer breaks through very early while others remain ``clean''.
+
+\subsection*{Constraint names and residuals (exactly as printed by the code)}
+The evaluator prints MATLAB-style residuals with these exact names (see \texttt{cbo\_flow/egg\_main.py}). Each printed value is a constraint residual of the form:
+\[
+C_k(x) = \text{metric}(x) - \text{limit},
+\]
+and the constraint is satisfied if $C_k(x)\le 0$ (negative means slack).
+\begin{itemize}
+  \item \texttt{C1\_PeakFieldWaterInjectionRate}: peak field injected water rate minus limit (SM3/DAY).\\
+  Definition: $\max_t(\mathrm{FWIR}(t)) - Q_{\mathrm{winj}}^{\max} \le 0$.
+  \item \texttt{C2\_PeakFieldWaterProductionRate}: peak field produced water rate minus limit (SM3/DAY).\\
+  Definition: $\max_t(\mathrm{FWPR}(t)) - Q_{\mathrm{wprod}}^{\max} \le 0$.
+  \item \texttt{C3\_PeakFieldLiquidRate}: peak field liquid rate minus limit (SM3/DAY).\\
+  Definition: $\max_t(\mathrm{FOPR}(t)+\mathrm{FWPR}(t)) - Q_{\mathrm{liq}}^{\max} \le 0$.
+  \item \texttt{C4\_PeakFieldWaterCut}: peak field water cut minus limit (-).\\
+  Definition: $\max_t\!\left(\frac{\mathrm{FWPR}(t)}{\mathrm{FOPR}(t)+\mathrm{FWPR}(t)+\epsilon}\right) - \mathrm{WC}^{\max} \le 0$.
+  \item \texttt{C5\_EarlyWaterCutUpToYears}: early breakthrough constraint on field water cut (-).\\
+  Definition: $\max_{t\le T_{\mathrm{early}}}(\mathrm{WC}(t)) - \mathrm{WC}_\epsilon \le 0$.
+  \item \texttt{C6\_BreakthroughTimeSpreadAcrossProducers}: producer breakthrough-time spread constraint (years).\\
+  Definition: $(\max_j t_{bt,j}-\min_j t_{bt,j}) - \Delta t_{\max} \le 0$ where $t_{bt,j}$ is the first time $\mathrm{WC}_j(t)\ge \mathrm{WC}_\epsilon$.
+\end{itemize}
+
+\section{How thresholds are configured (matches the code)}
+All ``hyperparameters'' live in the YAML/JSON config (no hard-coded values in the evaluator). In particular:
+\begin{itemize}
+  \item \texttt{constraints.C1\_PeakFieldWaterInjectionRate.limit} sets $Q_{\mathrm{winj}}^{\max}$.
+  \item \texttt{constraints.C2\_PeakFieldWaterProductionRate.limit} (or \texttt{limit\_factor}) sets $Q_{\mathrm{wprod}}^{\max}$.
+  \item \texttt{constraints.C3\_PeakFieldLiquidRate.limit} (or \texttt{limit\_factor}) sets $Q_{\mathrm{liq}}^{\max}$.
+  \item \texttt{constraints.C4\_PeakFieldWaterCut.limit} sets $\mathrm{WC}^{\max}$.
+  \item \texttt{constraints.C5\_EarlyWaterCutUpToYears.years} sets $T_{\mathrm{early}}$.
+  \item \texttt{constraints.C5\_EarlyWaterCutUpToYears.wc\_eps} sets $\mathrm{WC}_\epsilon$.
+  \item \texttt{constraints.C6\_BreakthroughTimeSpreadAcrossProducers.delta\_years\_max} sets $\Delta t_{\max}$.
+\end{itemize}
+
+\section{Black-box evaluation interface}
+A single evaluation takes $x$ and returns objective and constraints:
+\[
+\texttt{evaluate}(x)\ \mapsto\ \big(f(x),\ g_{\mathrm{winj}}(x),\ g_{\mathrm{wprod}}(x),\ g_{\mathrm{liq}}(x),\ g_{\mathrm{wc}}(x),\ g_{\mathrm{wc,early}}(x),\ g_{\mathrm{bt,spread}}(x)\big),
+\]
+where the simulator run and output parsing are encapsulated as a black box.
+
+\section{Implementation notes (what the code actually does)}
+The current implementation is driven by \texttt{cbo\_flow/egg\_main.py} and a YAML/JSON config (default: \texttt{cbo\_flow/egg\_config.yaml}):
+\begin{itemize}
+  \item It creates a fresh work directory (copies the base deck, patches controls and optionally a permeability realization).
+  \item It runs \texttt{flow Eclipse/Egg\_Model\_ECL.DATA --output-dir=out\_serial}.
+  \item It parses the Eclipse-style tables in the \texttt{*.PRT} to compute NPV and peak field-rate constraints (C1--C4).
+  \item It reads \texttt{*.SMSPEC/*.UNSMRY} (via \texttt{resdata}) to compute well-level breakthrough times and C5--C6, and to plot producer water cuts.
+\end{itemize}
+
+\subsection*{Plots}
+The plotting is done by \texttt{cbo\_flow/make\_plots.py}. When enabled in the config:
+\begin{itemize}
+  \item \texttt{rates\_prt.png}: field rates (and optional water cut) from PRT.
+  \item \texttt{WC\_PROD.png}: one plot with four curves (PROD1--PROD4) for producer water cut.
+\end{itemize}
+
+\end{document}

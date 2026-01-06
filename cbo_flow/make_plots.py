@@ -264,6 +264,7 @@ def plot_producer_wc_combined(
     ax.set_title("Producer water cut")
     ax.legend(ncol=2)
     fig.tight_layout()
+    ensure_dir(save.parent)
     fig.savefig(save, dpi=150)
     plt.close(fig)
 
@@ -318,6 +319,7 @@ def merge_three_plots(prt_png: Path, bin_png: Path, prod_wc_png: Path, merged_pn
         ax.set_title(title)
         ax.axis("off")
     fig.tight_layout()
+    ensure_dir(merged_png.parent)
     fig.savefig(merged_png, dpi=150)
     plt.close(fig)
 
@@ -338,20 +340,22 @@ def main() -> None:
     p.add_argument("--wc-lines", type=str, default="", help="Comma-separated WC horizontal lines, e.g. 0.01,0.95")
     p.add_argument("--field-save", type=Path, default=None, help="Explicit PNG path when field-source is prt or bin")
     p.add_argument("--prod-wc", action="store_true", help="Also plot producer WC (all producers on one plot)")
+    p.add_argument("--prod-wc-save", type=Path, default=None, help="Explicit PNG path for combined producer WC plot")
     p.add_argument("--per-well-wc", action="store_true", help="Also plot WC for each producer (one PNG per well)")
     p.add_argument("--per-well-save-dir", type=Path, default=None, help="Directory to write per-well WC PNGs")
     p.add_argument("--per-well-prefix", type=str, default="WC")
     p.add_argument("--wells", type=str, default="PROD1,PROD2,PROD3,PROD4", help="Comma-separated producer wells")
     p.add_argument("--no-merge", action="store_true", help="Do not write the merged 3-panel figure")
+    p.add_argument("--merged-save", type=Path, default=None, help="Explicit PNG path for merged 3-panel figure")
     args = p.parse_args()
 
     out_dir: Path = args.output_dir
 
     base = out_dir / args.out_prefix
-    prt_png = Path(str(base) + "_prt.png")
-    bin_png = Path(str(base) + "_bin.png")
-    prod_wc_png = Path(str(base) + "_prod_wc.png")
-    merged_png = Path(str(base) + "_merged.png")
+    prt_png_default = Path(str(base) + "_prt.png")
+    bin_png_default = Path(str(base) + "_bin.png")
+    prod_wc_png_default = Path(str(base) + "_prod_wc.png")
+    merged_png_default = Path(str(base) + "_merged.png")
 
     show_wc = bool(args.wc or args.wc_max is not None)
     wells = [w.strip() for w in args.wells.split(",") if w.strip()]
@@ -363,12 +367,13 @@ def main() -> None:
     if args.field_save is not None and args.field_source in ("both", "none"):
         raise ValueError("--field-save requires --field-source prt or bin")
 
-    wrote_prt = False
-    wrote_bin = False
+    prt_png: Path | None = None
+    bin_png: Path | None = None
+    prod_wc_png: Path | None = None
 
     if args.field_source in ("prt", "both"):
         series = load_field_series_from_prt(out_dir)
-        save = args.field_save if args.field_source == "prt" and args.field_save is not None else prt_png
+        save = args.field_save if args.field_source == "prt" and args.field_save is not None else prt_png_default
         title = f"Field rates from PRT: {detect_single(out_dir, '*.PRT').name}"
         plot_field_series(
             series,
@@ -384,11 +389,11 @@ def main() -> None:
             eps=eps,
         )
         print(f"Wrote: {save}")
-        wrote_prt = True
+        prt_png = save
 
     if args.field_source in ("bin", "both"):
         series = load_field_series_from_binaries(out_dir)
-        save = args.field_save if args.field_source == "bin" and args.field_save is not None else bin_png
+        save = args.field_save if args.field_source == "bin" and args.field_save is not None else bin_png_default
         case_name = detect_single(out_dir, "*.SMSPEC").with_suffix("").name
         title = f"Field rates from binaries: {case_name}"
         plot_field_series(
@@ -405,18 +410,20 @@ def main() -> None:
             eps=eps,
         )
         print(f"Wrote: {save}")
-        wrote_bin = True
+        bin_png = save
 
     if args.prod_wc:
+        save = args.prod_wc_save if args.prod_wc_save is not None else prod_wc_png_default
         plot_producer_wc_combined(
             output_dir=out_dir,
             wells=wells,
             x_mode=args.x,
             eps=eps,
             wc_lines=wc_lines,
-            save=prod_wc_png,
+            save=save,
         )
-        print(f"Wrote: {prod_wc_png}")
+        print(f"Wrote: {save}")
+        prod_wc_png = save
 
     if args.per_well_wc:
         save_dir = args.per_well_save_dir if args.per_well_save_dir is not None else (out_dir / "prod_wc_plots")
@@ -431,12 +438,10 @@ def main() -> None:
         )
         print(f"Wrote: {save_dir}")
 
-    if args.prod_wc and wrote_prt and wrote_bin and not args.no_merge:
-        if args.field_save is not None:
-            raise ValueError("Merged figure requires default file naming (do not use --field-save)")
-        if not args.no_merge:
-            merge_three_plots(prt_png, bin_png, prod_wc_png, merged_png)
-            print(f"Wrote: {merged_png}")
+    if (not args.no_merge) and (prt_png is not None) and (bin_png is not None) and (prod_wc_png is not None):
+        merged_png = args.merged_save if args.merged_save is not None else merged_png_default
+        merge_three_plots(prt_png, bin_png, prod_wc_png, merged_png)
+        print(f"Wrote: {merged_png}")
 
 
 if __name__ == "__main__":

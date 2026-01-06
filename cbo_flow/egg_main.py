@@ -6,7 +6,7 @@ One-shot Egg CBO evaluation driven by a YAML config.
 
 Config provides:
   - paths (dataset_root, work_dir, output_dir)
-  - 1-stage controls (12 vars: 8 injector rates + 4 producer BHP targets)
+  - controls (injector rates only; producer BHP fixed)
   - economics (USD/SM3)
   - constraints (eps + optional limits)
 
@@ -830,6 +830,18 @@ def main() -> None:
             raise ValueError("controls.stage_tsteps must be a list or null")
         stage_tsteps = [int(x) for x in stage_tsteps_raw]
 
+    prod_bhp_fixed = get_optional_float(controls, "prod_bhp_fixed")
+    if prod_bhp_fixed is None:
+        prod_bhp_fixed_list = controls.get("prod_bhp_fixed_list")
+        if prod_bhp_fixed_list is None:
+            raise ValueError("Missing controls.prod_bhp_fixed (set producer BHP target, e.g. 395)")
+        if not isinstance(prod_bhp_fixed_list, list):
+            raise ValueError("controls.prod_bhp_fixed_list must be a list of 4 numbers or null")
+        prod_bhp_vec = [float(x) for x in prod_bhp_fixed_list]
+        require_len("controls.prod_bhp_fixed_list", prod_bhp_vec, 4)
+    else:
+        prod_bhp_vec = [float(prod_bhp_fixed)] * 4
+
     controls_vars = controls.get("vars")
     stage_inj_rates: list[list[float]] = []
     stage_prod_bhp: list[list[float]] = []
@@ -837,16 +849,16 @@ def main() -> None:
         if not isinstance(controls_vars, list):
             raise ValueError("controls.vars must be a list of numbers")
         flat = [float(x) for x in controls_vars]
-        require_len("controls.vars", flat, 12 * n_stages)
+        require_len("controls.vars", flat, 8 * n_stages)
         for s in range(n_stages):
-            off = 12 * s
+            off = 8 * s
             stage_inj_rates.append(flat[off : off + 8])
-            stage_prod_bhp.append(flat[off + 8 : off + 12])
     else:
         if n_stages != 1:
-            raise ValueError("For multi-stage, provide controls.vars (length 12*n_stages)")
+            raise ValueError("For multi-stage, provide controls.vars (length 8*n_stages)")
         stage_inj_rates = [get_required_float_list(controls, "inj_rates", 8)]
-        stage_prod_bhp = [get_required_float_list(controls, "prod_bhp", 4)]
+
+    stage_prod_bhp = [list(prod_bhp_vec) for _ in range(n_stages)]
 
     if stage_tsteps is not None:
         if len(stage_tsteps) != n_stages:
@@ -1049,9 +1061,13 @@ def main() -> None:
         x = get_optional_str(plot_prod_wc_cfg, "x") or "dates"
         save_dir_name = get_optional_str(plot_prod_wc_cfg, "save_dir") or "prod_wc_plots"
         prefix = get_optional_str(plot_prod_wc_cfg, "prefix") or "WC"
+        mode = get_optional_str(plot_prod_wc_cfg, "mode") or "combined"
+        save_name = get_optional_str(plot_prod_wc_cfg, "save")  # only for combined mode
         wc_lines_raw = plot_prod_wc_cfg.get("wc_lines", [])
         if x not in ("days", "dates"):
             raise ValueError("plot_prod_wc.x must be 'days' or 'dates'")
+        if mode not in ("combined", "per_well"):
+            raise ValueError("plot_prod_wc.mode must be 'combined' or 'per_well'")
         if wc_lines_raw is not None and not isinstance(wc_lines_raw, list):
             raise ValueError("plot_prod_wc.wc_lines must be a list or null")
         wc_lines = ",".join(str(float(v)) for v in (wc_lines_raw or []))
@@ -1062,29 +1078,57 @@ def main() -> None:
             raise FileNotFoundError(f"Missing plot script: {script}")
 
         save_dir = out_dir / save_dir_name
-        cmd3 = [
-            sys.executable,
-            str(script),
-            "--output-dir",
-            str(out_dir),
-            "--field-source",
-            "none",
-            "--per-well-wc",
-            "--wells",
-            ",".join(["PROD1", "PROD2", "PROD3", "PROD4"]),
-            "--x",
-            x,
-            "--per-well-save-dir",
-            str(save_dir),
-            "--eps",
-            str(eps),
-            "--per-well-prefix",
-            prefix,
-        ]
-        if wc_lines:
-            cmd3.extend(["--wc-lines", wc_lines])
-        subprocess.run(cmd3, check=True)
-        print(f"PLOT_PROD_WC_DIR = '{save_dir}';")
+        wells_csv = ",".join(["PROD1", "PROD2", "PROD3", "PROD4"])
+
+        if mode == "per_well":
+            cmd3 = [
+                sys.executable,
+                str(script),
+                "--output-dir",
+                str(out_dir),
+                "--field-source",
+                "none",
+                "--per-well-wc",
+                "--wells",
+                wells_csv,
+                "--x",
+                x,
+                "--per-well-save-dir",
+                str(save_dir),
+                "--eps",
+                str(eps),
+                "--per-well-prefix",
+                prefix,
+            ]
+            if wc_lines:
+                cmd3.extend(["--wc-lines", wc_lines])
+            subprocess.run(cmd3, check=True)
+            print(f"PLOT_PROD_WC_DIR = '{save_dir}';")
+        else:
+            fname = save_name.strip() if isinstance(save_name, str) and save_name.strip() else f"{prefix}_PROD.png"
+            save_path = save_dir / fname
+            cmd3 = [
+                sys.executable,
+                str(script),
+                "--output-dir",
+                str(out_dir),
+                "--field-source",
+                "none",
+                "--prod-wc",
+                "--prod-wc-save",
+                str(save_path),
+                "--wells",
+                wells_csv,
+                "--x",
+                x,
+                "--eps",
+                str(eps),
+                "--no-merge",
+            ]
+            if wc_lines:
+                cmd3.extend(["--wc-lines", wc_lines])
+            subprocess.run(cmd3, check=True)
+            print(f"PLOT_PROD_WC = '{save_path}';")
 
     # MATLAB-style output (easy to parse).
     def fmt_num(v: float) -> str:

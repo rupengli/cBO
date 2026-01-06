@@ -5,6 +5,9 @@
 !.gitignore
 !cbo_flow/
 !cbo_flow/**
+!*.tex
+!manual/
+!manual/test.tex
 
 # Re-ignore generated files inside cbo_flow/
 **/__pycache__/

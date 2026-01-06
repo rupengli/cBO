@@ -13,7 +13,7 @@ flow:
 perm_realization: 1
 
 # Controls: multi-stage supported.
-# Total decision vars must be 12*n_stages.
+# Total decision vars must be 8*n_stages (injector rates only).
 controls:
   # Number of control stages
   n_stages: 1
@@ -25,9 +25,12 @@ controls:
     BHP_MIN: 350.0     # bar      (suggested for BO testing)
     BHP_MAX: 395.0     # bar      (standard Egg producer BHP)
 
-  # Flat decision vector of length 12*n_stages.
-  # Ordering (per stage): 8 injector rates (INJECT1..8) then 4 producer BHP (PROD1..4)
-  vars: [10, 20, 10, 20, 10, 20, 10, 20, 395, 395, 395, 395]
+  # Fixed producer BHP target (bar). Not a decision variable.
+  prod_bhp_fixed: 395.0
+
+  # Flat decision vector of length 8*n_stages.
+  # Ordering (per stage): 8 injector rates (INJECT1..8)
+  vars: [10, 20, 10, 20, 10, 20, 10, 20]
 
   # Optional: how many existing TSTEP blocks to allocate to each stage.
   # If omitted/null, stages are split evenly across the existing TSTEP blocks.
@@ -100,6 +103,8 @@ plot:
 # Uses binary summary vectors: WOPR:PRODj and WWPR:PRODj, so ECL output must be enabled.
 plot_prod_wc:
   enable: true
+  mode: combined   # combined (one figure with 4 curves) or per_well (one PNG per well)
   x: dates
-  save_dir: prod_wc_plots
+  save_dir: .
+  save: WC_PROD.png
   wc_lines: [0.01, 0.95]
