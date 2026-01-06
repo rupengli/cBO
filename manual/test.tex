@@ -16,24 +16,26 @@ We build a constrained Bayesian optimization (CBO) test environment using the \e
   \item several black-box constraints computed from simulator outputs (facility/capacity constraints).
 \end{itemize}
 
-\section{Installing OPM Flow}
-For up-to-date installation instructions, use the official OPM page:
-\begin{center}
-\url{https://opm-project.org/?page_id=36}
-\end{center}
-In short, OPM recommends using binary packages when available (e.g., Ubuntu via PPA and RHEL via an online repository), and building from source otherwise. The same page links to:
-\begin{itemize}
-  \item \textbf{Binary Packages}: detailed steps for supported Linux distributions.
-  \item \textbf{Compiling from source}: generic Linux/macOS build instructions.
-  \item \textbf{Windows}: guidance for running Flow under WSL2 or via a virtual machine.
-\end{itemize}
+\section{Getting the code (GitHub)}
+Clone the project repository:
+\begin{verbatim}
+git clone https://github.com/rupengli/cBO.git
+\end{verbatim}
+Then change into the repository folder:
+\begin{verbatim}
+cd cBO
+\end{verbatim}
 
 \section{Downloading the Egg model data files}
 The Egg benchmark deck and supporting include files are available from:
 \begin{center}
 \url{https://data.4tu.nl/articles/dataset/The_Egg_Model_-_data_files/12707642}
 \end{center}
-After downloading, unzip the dataset and ensure the folder layout matches what the code expects. By default, the config uses:
+Download the dataset zip (e.g., \texttt{data.zip}) and unzip it in the project folder:
+\begin{verbatim}
+unzip data.zip
+\end{verbatim}
+After unzipping, ensure the folder layout matches what the code expects. By default, the config uses:
 \[
 \texttt{paths.dataset\_root: Egg\_Model\_Data\_Files\_v2}
 \]
@@ -45,8 +47,15 @@ and the evaluator expects (at minimum) paths such as:
 \end{itemize}
 If you unzip into a different folder name or location, update \texttt{paths.dataset\_root} in the YAML/JSON config accordingly.
 
+\section{Installing OPM Flow}
+Install OPM Flow by following the official OPM instructions:
+\begin{center}
+\url{https://opm-project.org/?page_id=36}
+\end{center}
+Verify that the \texttt{flow} executable is available in your shell (\texttt{flow --version}).
+
 \section{Quick start (run one evaluation)}
-With OPM Flow installed and the data files in place, a typical run is:
+With OPM Flow installed and the data files unzipped, run:
 \begin{verbatim}
 python3 cbo_flow/egg_main.py --config cbo_flow/egg_config.yaml
 \end{verbatim}
@@ -59,6 +68,51 @@ This will:
 
 \section{Decision Variables (8$\times$stages, piecewise-constant controls)}
 The Egg setting uses 12 wells: 8 injectors and 4 producers. The decision variables control only the \textbf{injector rates}. Producer BHP is fixed at a constant value (395 bar in the current config). Controls are \emph{piecewise-constant} over $n_{\mathrm{stages}}$ stages on the full horizon $[0,T]$. The number of stages is a user input in the config file.
+
+\subsection*{Multi-stage usage (any $8n_{\mathrm{stages}}$ problem)}
+You can choose \emph{any} number of stages $n_{\mathrm{stages}}\ge 1$. The only requirement is:
+\[
+\text{len}(\texttt{controls.vars}) = 8n_{\mathrm{stages}}.
+\]
+The list is ordered stage-by-stage:
+\begin{itemize}
+  \item Stage 1 uses the first 8 values: \texttt{INJECT1..INJECT8}
+  \item Stage 2 uses the next 8 values: \texttt{INJECT1..INJECT8}
+  \item \dots
+  \item Stage $n_{\mathrm{stages}}$ uses the last 8 values
+\end{itemize}
+
+\subsection*{How stages map to time (\texttt{stage\_tsteps})}
+The simulator deck already contains a fixed number of time-step blocks (in this Egg setup it is 120 blocks). The config entry \texttt{controls.stage\_tsteps} specifies how many of those blocks are allocated to each stage:
+\begin{itemize}
+  \item It must have length $n_{\mathrm{stages}}$
+  \item Its elements must sum to the total number of blocks (120 for the provided Egg schedule)
+\end{itemize}
+If \texttt{stage\_tsteps} is omitted, the code splits the blocks evenly across stages.
+
+\paragraph{Example: 2 stages.}
+\begin{verbatim}
+controls:
+  n_stages: 2
+  vars: [qI1..qI8_stage1, qI1..qI8_stage2]   # 16 values total
+  stage_tsteps: [60, 60]                     # first half, second half
+\end{verbatim}
+
+\paragraph{Example: 3 stages.}
+\begin{verbatim}
+controls:
+  n_stages: 3
+  vars: [8 values for stage1, 8 for stage2, 8 for stage3]  # 24 total
+  stage_tsteps: [40, 40, 40]                                # equal split
+\end{verbatim}
+
+\paragraph{Example: 4 stages (non-uniform).}
+\begin{verbatim}
+controls:
+  n_stages: 4
+  vars: [32 values total]                 # 8*4
+  stage_tsteps: [10, 20, 30, 60]          # sums to 120
+\end{verbatim}
 
 \subsection*{Control policy}
 \begin{itemize}
