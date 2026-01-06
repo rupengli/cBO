@@ -1,0 +1,105 @@
+paths:
+  dataset_root: Egg_Model_Data_Files_v2
+  work_dir: runs/egg_1stage
+  output_dir: out_serial
+
+# Note: this project parses the Eclipse-style tables from the `.PRT`, which are written when
+# `enable_ecl_output` is true. If you set it to false, `egg_main.py` will run Flow but then
+# fail to find the tables in the `.PRT`.
+flow:
+  enable_ecl_output: true
+
+# Permeability realization index (1..101). Set to null to keep the deck's original include (mDARCY.INC).
+perm_realization: 1
+
+# Controls: multi-stage supported.
+# Total decision vars must be 12*n_stages.
+controls:
+  # Number of control stages
+  n_stages: 1
+
+  # Recommended bounds (used for validation in egg_main.py)
+  bounds:
+    Q_INJ_MIN: 0.2     # Sm3/day  (common Egg bound)
+    Q_INJ_MAX: 79.5    # Sm3/day  (common Egg bound)
+    BHP_MIN: 350.0     # bar      (suggested for BO testing)
+    BHP_MAX: 395.0     # bar      (standard Egg producer BHP)
+
+  # Flat decision vector of length 12*n_stages.
+  # Ordering (per stage): 8 injector rates (INJECT1..8) then 4 producer BHP (PROD1..4)
+  vars: [10, 20, 10, 20, 10, 20, 10, 20, 395, 395, 395, 395]
+
+  # Optional: how many existing TSTEP blocks to allocate to each stage.
+  # If omitted/null, stages are split evenly across the existing TSTEP blocks.
+  # stage_tsteps: [60, 60]
+
+# Brugge-style economics in USD/SM3 (already converted from USD/STB using 1 SM3 = 6.2898107704 STB)
+economics:
+  oil_price_usd_per_sm3: 503.184861632
+  wprod_cost_usd_per_sm3: 31.449053852
+  winj_cost_usd_per_sm3: 31.449053852
+
+constraints:
+  eps: 1e-12
+
+  # Constraint order (matches printed C1..C6 in egg_main.py)
+  C_order:
+    [
+      C1_PeakFieldWaterInjectionRate,
+      C2_PeakFieldWaterProductionRate,
+      C3_PeakFieldLiquidRate,
+      C4_PeakFieldWaterCut,
+      C5_EarlyWaterCutUpToYears,
+      C6_BreakthroughTimeSpreadAcrossProducers,
+    ]
+
+  # C1: Peak field injected water rate
+  C1_PeakFieldWaterInjectionRate:
+    enable: true
+    limit: 636.0  # SM3/DAY = 79.5*8
+
+  # C2: Peak field produced water rate
+  C2_PeakFieldWaterProductionRate:
+    enable: true
+    limit_factor: 1.1 # SM3/DAY = C2.limit_factor * C1.limit
+
+  # C3: Peak field produced liquid rate
+  C3_PeakFieldLiquidRate:
+    enable: true
+    limit_factor: 1.1 # SM3/DAY = C3.limit_factor * C1.limit
+
+  # C4: Peak field water cut
+  C4_PeakFieldWaterCut:
+    enable: true
+    limit: 0.95 # water cut ratio, 95% is quite good choice
+
+  # C5: Early breakthrough (keep field WC small up to given years)
+  C5_EarlyWaterCutUpToYears:
+    enable: true
+    years: 2.0
+    wc_eps: 0.01
+
+  # C6: Breakthrough-time spread across producers
+  # t_bt,j = first time WC_j(t) >= wc_eps (in years). If never, treat as +inf.
+  # g = (max_j t_bt,j - min_j t_bt,j) - delta_years_max <= 0
+  C6_BreakthroughTimeSpreadAcrossProducers:
+    enable: true
+    wc_eps: 0.01
+    delta_years_max: 6.0
+
+# Optional: write a line-chart after the simulation finishes.
+plot:
+  enable: true
+  source: prt   # prt (preferred) or bin
+  x: dates      # days or dates
+  qliq: true
+  wc: true
+  save: rates_prt.png
+
+# Optional: plot water cut per producer (one PNG per well).
+# Uses binary summary vectors: WOPR:PRODj and WWPR:PRODj, so ECL output must be enabled.
+plot_prod_wc:
+  enable: true
+  x: dates
+  save_dir: prod_wc_plots
+  wc_lines: [0.01, 0.95]

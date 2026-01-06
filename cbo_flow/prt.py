@@ -22,15 +22,15 @@ _WELLS_AT_RE = re.compile(r"^\s*WELLS\s+AT\s+(?P<day>[0-9]+(?:\.[0-9]+)?)\s+DAYS
 _WELLS_REPORT_LINE_RE = re.compile(r"^\s*REPORT\s+\d+\s+(?P<date>.+?)\s+\*")
 
 
-def _split_cells(line: str) -> list[str]:
+def split_cells(line: str) -> list[str]:
     parts = line.rstrip("\n").split(":")
     if len(parts) < 3:
         return []
     return [cell.strip() for cell in parts[1:-1]]
 
 
-def _merge_headers(header_lines: list[str]) -> list[str]:
-    rows = [_split_cells(h) for h in header_lines]
+def merge_headers(header_lines: list[str]) -> list[str]:
+    rows = [split_cells(h) for h in header_lines]
     if not rows or any(not r for r in rows):
         return []
     ncols = min(len(r) for r in rows)
@@ -42,7 +42,7 @@ def _merge_headers(header_lines: list[str]) -> list[str]:
     return merged
 
 
-def _parse_table(lines: Iterable[str]) -> tuple[dict[str, dict[str, str]], list[str]]:
+def parse_table(lines: Iterable[str]) -> tuple[dict[str, dict[str, str]], list[str]]:
     """
     Parse a Flow PRT colon-delimited table.
 
@@ -57,7 +57,7 @@ def _parse_table(lines: Iterable[str]) -> tuple[dict[str, dict[str, str]], list[
     for _ in range(3):
         header_lines.append(next(iterator))
 
-    columns = _merge_headers(header_lines)
+    columns = merge_headers(header_lines)
     if not columns:
         raise ValueError("Failed to parse table header")
 
@@ -72,7 +72,7 @@ def _parse_table(lines: Iterable[str]) -> tuple[dict[str, dict[str, str]], list[
         if not line.startswith(":"):
             remainder.append(line)
             continue
-        cells = _split_cells(line)
+        cells = split_cells(line)
         if not cells:
             continue
         # Some rows may have fewer cells (rare). Only map what we have.
@@ -85,7 +85,7 @@ def _parse_table(lines: Iterable[str]) -> tuple[dict[str, dict[str, str]], list[
     return rows, remainder
 
 
-def _first_nonempty(mapping: dict[str, str], keys: list[str]) -> str | None:
+def first_nonempty(mapping: dict[str, str], keys: list[str]) -> str | None:
     for key in keys:
         val = mapping.get(key)
         if val is not None and val.strip() != "":
@@ -93,7 +93,7 @@ def _first_nonempty(mapping: dict[str, str], keys: list[str]) -> str | None:
     return None
 
 
-def _as_float(raw: str | None) -> float | None:
+def as_float(raw: str | None) -> float | None:
     if raw is None:
         return None
     s = raw.strip()
@@ -174,7 +174,7 @@ def parse_prt_report_steps(prt_path: str | Path) -> list[ReportStep]:
                 i += 1
             if i + 3 >= len(text):
                 break
-            rows, remainder = _parse_table(text[i:])
+            rows, remainder = parse_table(text[i:])
             pending["prod"] = rows.get("FIELD", {})
             i = len(text) - len(remainder)
             continue
@@ -185,7 +185,7 @@ def parse_prt_report_steps(prt_path: str | Path) -> list[ReportStep]:
                 i += 1
             if i + 3 >= len(text):
                 break
-            rows, remainder = _parse_table(text[i:])
+            rows, remainder = parse_table(text[i:])
             pending["inj"] = rows.get("FIELD", {})
             i = len(text) - len(remainder)
             continue
@@ -196,7 +196,7 @@ def parse_prt_report_steps(prt_path: str | Path) -> list[ReportStep]:
                 i += 1
             if i + 3 >= len(text):
                 break
-            rows, remainder = _parse_table(text[i:])
+            rows, remainder = parse_table(text[i:])
             pending["cum"] = rows.get("FIELD", {})
             i = len(text) - len(remainder)
             continue
@@ -241,14 +241,14 @@ def extract_field_series(prt_path: str | Path) -> FieldSeries:
     for st in steps:
         days.append(st.day)
 
-        prod_oil = _as_float(
-            _first_nonempty(st.prod, ["OIL RATE", "OIL RATE STB/DAY", "OIL RATE SCM/DAY"])
+        prod_oil = as_float(
+            first_nonempty(st.prod, ["OIL RATE", "OIL RATE STB/DAY", "OIL RATE SCM/DAY"])
         )
-        prod_wat = _as_float(
-            _first_nonempty(st.prod, ["WATER RATE", "WATER RATE STB/DAY", "WATER RATE SCM/DAY"])
+        prod_wat = as_float(
+            first_nonempty(st.prod, ["WATER RATE", "WATER RATE STB/DAY", "WATER RATE SCM/DAY"])
         )
-        inj_wat = _as_float(
-            _first_nonempty(st.inj, ["WATER RATE", "WATER RATE STB/DAY", "WATER RATE SCM/DAY"])
+        inj_wat = as_float(
+            first_nonempty(st.inj, ["WATER RATE", "WATER RATE STB/DAY", "WATER RATE SCM/DAY"])
         )
 
         oil_rate.append(prod_oil or 0.0)
@@ -256,12 +256,12 @@ def extract_field_series(prt_path: str | Path) -> FieldSeries:
         water_inj_rate.append(inj_wat or 0.0)
 
     last = steps[-1]
-    cum_oil = _as_float(_first_nonempty(last.cum, ["OIL PROD", "OIL PROD MSTB", "OIL PROD MSCM"])) or 0.0
+    cum_oil = as_float(first_nonempty(last.cum, ["OIL PROD", "OIL PROD MSTB", "OIL PROD MSCM"])) or 0.0
     cum_water_prod = (
-        _as_float(_first_nonempty(last.cum, ["WATER PROD", "WATER PROD MSTB", "WATER PROD MSCM"])) or 0.0
+        as_float(first_nonempty(last.cum, ["WATER PROD", "WATER PROD MSTB", "WATER PROD MSCM"])) or 0.0
     )
     cum_water_inj = (
-        _as_float(_first_nonempty(last.cum, ["WATER INJ", "WATER INJ MSTB", "WATER INJ MSCM"])) or 0.0
+        as_float(first_nonempty(last.cum, ["WATER INJ", "WATER INJ MSTB", "WATER INJ MSCM"])) or 0.0
     )
 
     return FieldSeries(
